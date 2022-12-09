@@ -10,6 +10,14 @@ from qiskit.circuit.gate import Gate
 from qiskit.providers.aer.noise import NoiseModel
 from qiskit.providers.aer.noise.errors import standard_errors, ReadoutError
 
+
+from qiskit.ignis.mitigation.measurement import tensored_meas_cal
+from qiskit.extensions import UnitaryGate
+from qiskit.ignis.mitigation.measurement import TensoredMeasFitter
+from libs_qrem import LeastNormFilter
+from qiskit.tools.visualization import plot_histogram
+
+
 # import sutff
 import sys
 import os.path as osp
@@ -61,6 +69,7 @@ class QATGConfiguration():
 		self.effectSize = np.nan
 
 		self.noiseModel = self.getNoiseModel()
+		self.noiseModel_noReadOutError = self.getNoiseModel_noReadOutError()
 
 	def __str__(self):
 		rt = ""
@@ -87,6 +96,20 @@ class QATGConfiguration():
 		noiseModel.add_all_qubit_quantum_error(oneQubitError, self.basisGateSetString)
 		noiseModel.add_all_qubit_quantum_error(twoQubitError, ['cx'])
 		noiseModel.add_all_qubit_readout_error(qubitReadoutError)
+
+		return noiseModel
+    
+	def getNoiseModel_noReadOutError(self):
+		# Depolarizing quantum errors
+		oneQubitError = standard_errors.depolarizing_error(self.oneQubitErrorProb, 1)
+		twoQubitError = standard_errors.depolarizing_error(self.twoQubitErrorProb, 2)
+		qubitReadoutError = ReadoutError([self.zeroReadoutErrorProb, self.oneReadoutErrorProb])
+
+		# Add errors to noise model
+		noiseModel = NoiseModel()
+		noiseModel.add_all_qubit_quantum_error(oneQubitError, self.basisGateSetString)
+		noiseModel.add_all_qubit_quantum_error(twoQubitError, ['cx'])
+		
 
 		return noiseModel
 
@@ -126,15 +149,17 @@ class QATGConfiguration():
 		return
 
 	def simulate(self):
-		simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
-		counts = simulateJob.result().get_counts()
+		#simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+		#counts = simulateJob.result().get_counts()
+		counts = self.qatg_QREM_faultfreeQCKT()
 		self.faultfreeDistribution = [0] * (2 ** self.circuitSize)
 		for k in counts:
 			self.faultfreeDistribution[int(k, 2)] = counts[k]
 		self.faultfreeDistribution = np.array(self.faultfreeDistribution / np.sum(self.faultfreeDistribution))
 
-		simulateJob = execute(self.faultyQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
-		counts = simulateJob.result().get_counts()
+		#simulateJob = execute(self.faultyQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+		#counts = simulateJob.result().get_counts()
+		counts = self.qatg_QREM_faultyQCKT()
 		self.faultyDistribution = [0] * (2 ** self.circuitSize)
 		for k in counts:
 			self.faultyDistribution[int(k, 2)] = counts[k]
@@ -211,6 +236,159 @@ class QATGConfiguration():
 				testEscape += 1
 
 		return testEscape / self.testSampleTime
+    
+	def qatg_QREM_faultfreeQCKT(self):
+    
+        #first run the calibration circuit
+		n = self.circuitSize
+		qr = self.quantumRegister 
+		mit_pattern = []
+		for i in range(n):
+			singlebit = [i]
+			mit_pattern.append(singlebit)
+    
+		meas_calibs, state_labels = tensored_meas_cal(mit_pattern=mit_pattern, qr=qr, circlabel='mcal')
+        #backend = Aer.get_backend('aer_simulator')
+    
+		no_readouterror_job = execute(meas_calibs, backend=self.backend, shots=self.simulationShots,noise_model=self.noiseModel_noReadOutError)
+        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+		no_readouterror_cal_results = no_readouterror_job .result()
+		print("no_readouterror")
+		print(no_readouterror_cal_results.get_counts())
+        
+		noise_job = execute(meas_calibs, backend=self.backend, shots=self.simulationShots, noise_model=self.noiseModel)
+		noise_cal_results = noise_job.result()
+		noisy_hist = noise_job.result().get_counts()
+		print("noisy_hist")
+		print(noisy_hist)
+        
+		meas_fitter = TensoredMeasFitter(noise_cal_results, mit_pattern=mit_pattern)
+		print("calibration matrices")
+		print(meas_fitter.cal_matrices)
+        
+		for i in range(n):
+			print('Readout fidelity of Q'+str(i)+': %f'%meas_fitter.readout_fidelity(i))
+			print('Q'+str(i)+' Calibration Matrix')
+			meas_fitter.plot_calibration(i)
+        
+        
+        
+		meas_filter = LeastNormFilter(n, meas_fitter.cal_matrices)
+        
+        
+		mitigated_hist = meas_filter.apply(noisy_hist)
+		print("mitigated_hist")
+		print(mitigated_hist)
+        #count = mitigated_hist.get_counts()
+        
+        #display(plot_histogram([noisy_hist, count], legend=['raw', 'mitigated']))
+        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+        #run the fault_free circuit
+		faultfree_noreadouterror = execute(self.faultfreeQCKT, backend=self.backend, shots=self.simulationShots,noise_model=self.getNoiseModel_noReadOutError())
+		faultfree_noreadouterror_results = faultfree_noreadouterror.result()
+        # Results without mitigation
+        
+		no_readouterror = faultfree_noreadouterror_results.get_counts()
+		print("no_readouterror")
+		print(no_readouterror)
+        
+        
+        
+		faultfree_noisy_job = execute(self.faultfreeQCKT, backend=self.backend, shots=self.simulationShots, noise_model=self.getNoiseModel())
+		faultfree_noisy_results = faultfree_noisy_job.result()
+        
+        # Results without mitigation
+		faultfree_raw_counts = faultfree_noisy_results.get_counts()
+    
+        # Get the filter object
+        #meas_filter = meas_fitter.filter
+        #print(meas_filter.cal_matrices)
+        # Results with mitigation
+		mitigated_results = meas_filter.apply(faultfree_noisy_results)
+		mitigated_counts = mitigated_results.get_counts()
+		display(plot_histogram([faultfree_raw_counts, mitigated_counts,no_readouterror], legend=['raw', 'mitigated','no_readouterror']))
+		print("raw_counts")
+		print(faultfree_raw_counts)
+		print("mitigated_counts")
+		print(mitigated_counts)
+        
+		return mitigated_counts
+	def qatg_QREM_faultyQCKT(self):
+    
+        #first run the calibration circuit
+		n = self.circuitSize
+		qr = self.quantumRegister 
+		mit_pattern = []
+		for i in range(n):
+			singlebit = [i]
+			mit_pattern.append(singlebit)
+    
+		meas_calibs, state_labels = tensored_meas_cal(mit_pattern=mit_pattern, qr=qr, circlabel='mcal')
+        #backend = Aer.get_backend('aer_simulator')
+    
+		no_readouterror_job = execute(meas_calibs, backend=self.backend, shots=self.simulationShots,noise_model=self.noiseModel_noReadOutError)
+        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+		no_readouterror_cal_results = no_readouterror_job .result()
+		print("no_readouterror")
+		print(no_readouterror_cal_results.get_counts())
+        
+		noise_job = execute(meas_calibs, backend=self.backend, shots=self.simulationShots, noise_model=self.noiseModel)
+		noise_cal_results = noise_job.result()
+		noisy_hist = noise_job.result().get_counts()
+		print("noisy_hist")
+		print(noisy_hist)
+        
+		meas_fitter = TensoredMeasFitter(noise_cal_results, mit_pattern=mit_pattern)
+		print("calibration matrices")
+		print(meas_fitter.cal_matrices)
+        
+		for i in range(n):
+			print('Readout fidelity of Q'+str(i)+': %f'%meas_fitter.readout_fidelity(i))
+			print('Q'+str(i)+' Calibration Matrix')
+			meas_fitter.plot_calibration(i)
+        
+        
+        
+		meas_filter = LeastNormFilter(n, meas_fitter.cal_matrices)
+        
+        
+		mitigated_hist = meas_filter.apply(noisy_hist)
+		print("mitigated_hist")
+		print(mitigated_hist)
+        #count = mitigated_hist.get_counts()
+        
+        #display(plot_histogram([noisy_hist, count], legend=['raw', 'mitigated']))
+        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+        #run the fault_free circuit
+		faultfree_noreadouterror = execute(self.faultyQCKT, backend=self.backend, shots=self.simulationShots,noise_model=self.getNoiseModel_noReadOutError())
+		faultfree_noreadouterror_results = faultfree_noreadouterror.result()
+        # Results without mitigation
+        
+		no_readouterror = faultfree_noreadouterror_results.get_counts()
+		print("no_readouterror")
+		print(no_readouterror)
+        
+        
+        
+		faultfree_noisy_job = execute(self.faultyQCKT, backend=self.backend, shots=self.simulationShots, noise_model=self.getNoiseModel())
+		faultfree_noisy_results = faultfree_noisy_job.result()
+        
+        # Results without mitigation
+		faultfree_raw_counts = faultfree_noisy_results.get_counts()
+    
+        # Get the filter object
+        #meas_filter = meas_fitter.filter
+        #print(meas_filter.cal_matrices)
+        # Results with mitigation
+		mitigated_results = meas_filter.apply(faultfree_noisy_results)
+		mitigated_counts = mitigated_results.get_counts()
+		display(plot_histogram([faultfree_raw_counts, mitigated_counts,no_readouterror], legend=['raw', 'mitigated','no_readouterror']))
+		print("raw_counts")
+		print(faultfree_raw_counts)
+		print("mitigated_counts")
+		print(mitigated_counts)
+        
+		return mitigated_counts
 
 	@property
 	def circuit(self):
