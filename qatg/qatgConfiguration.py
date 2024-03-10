@@ -251,7 +251,7 @@ class QATGConfiguration():
         
     
 		no_readouterror_job = execute(meas_calibs, backend=self.backend, shots=self.simulationShots,noise_model=self.noiseModel_noReadOutError)
-        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+        
 		no_readouterror_cal_results = no_readouterror_job .result()
 		print("no_readouterror")
 		print(no_readouterror_cal_results.get_counts())
@@ -298,8 +298,7 @@ class QATGConfiguration():
 		faultfree_raw_counts = faultfree_noisy_results.get_counts()
     
         # Get the filter object
-        #meas_filter = meas_fitter.filter
-        #print(meas_filter.cal_matrices)
+       
         # Results with mitigation
 		mitigated_results = meas_filter.apply(faultfree_noisy_results)
 		mitigated_counts = mitigated_results.get_counts()
@@ -321,10 +320,10 @@ class QATGConfiguration():
 			mit_pattern.append(singlebit)
     
 		meas_calibs, state_labels = tensored_meas_cal(mit_pattern=mit_pattern, qr=qr, circlabel='mcal')
-        #backend = Aer.get_backend('aer_simulator')
+        
     
 		no_readouterror_job = execute(meas_calibs, backend=self.backend, shots=self.simulationShots,noise_model=self.noiseModel_noReadOutError)
-        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+        
 		no_readouterror_cal_results = no_readouterror_job .result()
 		print("no_readouterror")
 		print(no_readouterror_cal_results.get_counts())
@@ -352,10 +351,7 @@ class QATGConfiguration():
 		mitigated_hist = meas_filter.apply(noisy_hist)
 		print("mitigated_hist")
 		print(mitigated_hist)
-        #count = mitigated_hist.get_counts()
-        
-        #display(plot_histogram([noisy_hist, count], legend=['raw', 'mitigated']))
-        #simulateJob = execute(self.faultfreeQCKT, self.backend, noise_model = self.noiseModel, shots = self.simulationShots)
+       
         #run the fault_free circuit
 		faultfree_noreadouterror = execute(self.faultyQCKT, backend=self.backend, shots=self.simulationShots,noise_model=self.getNoiseModel_noReadOutError())
 		faultfree_noreadouterror_results = faultfree_noreadouterror.result()
@@ -374,8 +370,7 @@ class QATGConfiguration():
 		faultfree_raw_counts = faultfree_noisy_results.get_counts()
     
         # Get the filter object
-        #meas_filter = meas_fitter.filter
-        #print(meas_filter.cal_matrices)
+       
         # Results with mitigation
 		mitigated_results = meas_filter.apply(faultfree_noisy_results)
 		mitigated_counts = mitigated_results.get_counts()
